@@ -1,2 +1,3 @@
-# FunSMPManager
-Minecraft Paper plugin project for Fun SMP Manager
+# Fun SMP Manager
+
+This repository contains a PaperMC plugin project for Fun SMP Manager.
