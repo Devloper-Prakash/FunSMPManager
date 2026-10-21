@@ -14,71 +14,82 @@ permissions:
 
 jobs:
   build:
-    name: Extract, Build, Test, and Publish JAR
+    name: Extract, Build, Test and Upload JAR
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract source ZIP automatically
+      - name: Verify source ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="FunSMPManager-source.zip"
-
-          if [[ ! -f "$ZIP_FILE" ]]; then
-            echo "::error::Source ZIP not found: $ZIP_FILE"
+          if [[ ! -f "FunSMPManager-source.zip" ]]; then
+            echo "::error::FunSMPManager-source.zip not found in repository root."
             exit 1
           fi
 
-          mkdir -p "$RUNNER_TEMP/funsmp-source"
-          unzip -q -o "$ZIP_FILE" -d "$RUNNER_TEMP/funsmp-source"
+      - name: Extract source ZIP automatically
+        id: extract
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          PROJECT_DIR="$(find "$RUNNER_TEMP/funsmp-source" \
+          EXTRACT_DIR="$RUNNER_TEMP/funsmp-source"
+          mkdir -p "$EXTRACT_DIR"
+
+          unzip -q -o "FunSMPManager-source.zip" -d "$EXTRACT_DIR"
+
+          PROJECT_DIR="$(find "$EXTRACT_DIR" \
             -type f -name settings.gradle -printf '%h\n' -quit)"
 
           if [[ -z "$PROJECT_DIR" ]]; then
-            PROJECT_DIR="$(find "$RUNNER_TEMP/funsmp-source" \
+            PROJECT_DIR="$(find "$EXTRACT_DIR" \
               -type f -name settings.gradle.kts -printf '%h\n' -quit)"
           fi
 
           if [[ -z "$PROJECT_DIR" ]]; then
-            echo "::error::No Gradle project found in ZIP."
+            echo "::error::No Gradle project found inside the ZIP."
+            echo "The ZIP must contain settings.gradle or settings.gradle.kts."
             exit 1
           fi
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Found project: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Project extracted to: $PROJECT_DIR"
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
-          cache: gradle
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.10.2"
 
       - name: Validate project files
         shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
 
           if [[ ! -f build.gradle && ! -f build.gradle.kts ]]; then
-            echo "::error::Gradle build file missing."
+            echo "::error::build.gradle or build.gradle.kts is missing."
             exit 1
           fi
 
-          test -f src/main/resources/plugin.yml
+          if [[ ! -f src/main/resources/plugin.yml ]]; then
+            echo "::error::src/main/resources/plugin.yml is missing."
+            exit 1
+          fi
 
       - name: Build and run tests
         shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
@@ -87,24 +98,29 @@ jobs:
             chmod +x ./gradlew
             ./gradlew clean test build --no-daemon
           else
+            # Generate a wrapper because the source ZIP may not include one.
             gradle wrapper --gradle-version 8.10.2
             ./gradlew clean test build --no-daemon
           fi
 
-      - name: Verify compiled JAR
+      - name: Locate and verify plugin JAR
         id: jar
         shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
         run: |
           set -euo pipefail
 
           JAR_FILE="$(find "$PROJECT_DIR/build/libs" \
-            -maxdepth 1 -type f -name '*.jar' \
+            -maxdepth 1 \
+            -type f \
+            -name '*.jar' \
             ! -name '*-sources.jar' \
             ! -name '*-javadoc.jar' \
             -print -quit)"
 
           if [[ -z "$JAR_FILE" || ! -s "$JAR_FILE" ]]; then
-            echo "::error::Compiled JAR not found."
+            echo "::error::No compiled JAR found in build/libs."
             exit 1
           fi
 
@@ -117,15 +133,15 @@ jobs:
 
           if ! grep -q '^plugin.yml$' \
             "$RUNNER_TEMP/funsmp-artifact/jar-contents.txt"; then
-            echo "::error::plugin.yml missing from JAR."
+            echo "::error::plugin.yml is missing from the JAR."
             exit 1
           fi
 
-          echo "JAR verified successfully."
+          echo "JAR verified."
           echo "jar_path=$RUNNER_TEMP/funsmp-artifact/FunSMPManager.jar" \
             >> "$GITHUB_OUTPUT"
 
-      - name: Upload ready-to-download JAR
+      - name: Upload compiled plugin JAR
         uses: actions/upload-artifact@v4
         with:
           name: FunSMPManager-JAR
@@ -134,10 +150,10 @@ jobs:
           retention-days: 14
 
       - name: Upload test reports
-        if: always() && env.PROJECT_DIR != ''
+        if: always() && steps.extract.outputs.project_dir != ''
         uses: actions/upload-artifact@v4
         with:
           name: FunSMPManager-Test-Reports
-          path: ${{ env.PROJECT_DIR }}/build/reports/tests/
+          path: ${{ steps.extract.outputs.project_dir }}/build/reports/tests/
           if-no-files-found: ignore
           retention-days: 7
