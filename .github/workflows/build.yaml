@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'funSMPManager.zip'
+      - 'FunSMPManager.zip'
       - '.github/workflows/build.yml'
 
 permissions:
